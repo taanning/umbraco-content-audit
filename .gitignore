@@ -1,0 +1,69 @@
+# .NET build output
+bin/
+obj/
+artifacts/
+*.nupkg
+*.snupkg
+*.binlog
+TestResults/
+
+# Node output
+node_modules/
+dist/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+
+# IDE and OS files
+.vs/
+.vscode/
+.idea/
+*.suo
+*.user
+*.userprefs
+.DS_Store
+Thumbs.db
+
+# Local agent and MCP tooling
+.agents/
+.devin/
+.mcp.json
+AGENTS.md
+
+# Umbraco local runtime data
+**/umbraco/
+**/wwwroot/media/
+*.sqlite.db
+*.sqlite.db-shm
+*.sqlite.db-wal
+*.mdf
+*.ldf
+
+# Local-only configuration and secrets
+*.local.json
+.env
+.env.*
+src/PropertyAuditTool.TestSite/appsettings.Development.json
+
+# Private development notes and tooling
+tools/
+.github/README.md
+SETUP.md
+setup.cmd
+setup.sh
+docs/IMPLEMENTATION_PLAN.md
+docs/SAVED_QUERIES_DESIGN.md
+docs/mcp-search-fixture.md
+docs/table-first-ui.md
+src/PropertyAuditTool.Compatibility.TestSites/
+
+# Generated schemas and client assets
+appsettings-schema*.json
+umbraco-package-schema.json
+src/PropertyAuditTool/wwwroot/App_Plugins/PropertyAuditTool/
+
+# Temporary files
+*.tmp
+*.log
+nul
