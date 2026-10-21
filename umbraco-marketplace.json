@@ -21,6 +21,18 @@
       "Caption": "Filtered audit results across document and element types"
     },
     {
+      "ImageUrl": "https://raw.githubusercontent.com/taanning/umbraco-content-audit/main/docs/screenshots/active-filters-collapsed.png",
+      "Caption": "Combined filters with and/or joiners read as one sentence"
+    },
+    {
+      "ImageUrl": "https://raw.githubusercontent.com/taanning/umbraco-content-audit/main/docs/screenshots/active-filters-expanded.png",
+      "Caption": "Expanded filters can be reordered by dragging"
+    },
+    {
+      "ImageUrl": "https://raw.githubusercontent.com/taanning/umbraco-content-audit/main/docs/screenshots/active-filters-joiner.png",
+      "Caption": "Each filter links to the next with an and/or joiner"
+    },
+    {
       "ImageUrl": "https://raw.githubusercontent.com/taanning/umbraco-content-audit/main/docs/screenshots/filter-panel.png",
       "Caption": "Per-column filters with simple operators or expressions"
     },
