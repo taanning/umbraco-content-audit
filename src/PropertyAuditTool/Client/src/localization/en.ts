@@ -54,6 +54,13 @@ export default {
     applyColumns: "Apply columns",
     applyAppearance: "Apply pin appearance",
     removeFilter: "Remove",
+    activeFilters: "Active filters",
+    joinerAnd: "and",
+    joinerOr: "or",
+    filterJoiner: "Combine with the next filter",
+    reorderFilter: "Drag to reorder",
+    chainOrderHint:
+      "Filters apply in order from top to bottom - drag to change the order.",
     clearFilters: "Clear filters",
     clearFiltersTitle: "Clear all filters",
     clearFiltersConfirm:

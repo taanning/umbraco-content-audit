@@ -2364,6 +2364,17 @@
               ]
             }
           },
+          "filterChain": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/AuditFilterLink"
+                }
+              ]
+            },
+            "nullable": true
+          },
           "hiddenBaseColumns": {
             "type": "array",
             "items": {
@@ -2769,6 +2780,22 @@
             "nullable": true
           },
           "expression": {
+            "type": "string",
+            "nullable": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "AuditFilterLink": {
+        "required": [
+          "column"
+        ],
+        "type": "object",
+        "properties": {
+          "column": {
+            "type": "string"
+          },
+          "joiner": {
             "type": "string",
             "nullable": true
           }

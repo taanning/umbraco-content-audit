@@ -1,4 +1,4 @@
-import type { AuditCatalogResponse, AuditColumnDefinition, AuditDefinition, PropertyAuditTypeModel as AuditTypeModel } from "../api/index.js";
+import type { AuditCatalogResponse, AuditColumnDefinition, AuditDefinition, AuditFilterLink, PropertyAuditTypeModel as AuditTypeModel } from "../api/index.js";
 
 export const BASE_COLUMNS = [
   { key: "kind", label: "colType" },
@@ -69,7 +69,7 @@ export function newTableDefinition(catalog: AuditCatalogResponse): AuditDefiniti
 
 /** Upgrade the editor's draft only; never broaden a stored legacy definition. */
 export function tableDefinition(definition: AuditDefinition): AuditDefinition {
-  return {
+  const value = {
     ...JSON.parse(JSON.stringify(definition)),
     schemaVersion: 3,
     allElementTypes: definition.allElementTypes ?? false,
@@ -78,7 +78,38 @@ export function tableDefinition(definition: AuditDefinition): AuditDefinition {
       : definition.culture ? ["", definition.culture] : [""]),
     rowFilters: definition.rowFilters ?? [],
     hiddenBaseColumns: sanitizeHiddenBaseColumns(definition.hiddenBaseColumns),
-  };
+    filterChain: definition.filterChain ?? null,
+  } as AuditDefinition;
+  value.filterChain = normalizedFilterChain(value.columns ?? [], value.filterChain);
+  return value;
+}
+
+/**
+ * Ordered filter chain in persisted shape: one entry per filtered column,
+ * declared order first, newly filtered columns appended, last entry has no
+ * joiner. Evaluation folds left to right, so order and joiners are the whole
+ * predicate; an absent or stale declared chain degrades to plain AND.
+ */
+export function normalizedFilterChain(
+  columns: ReadonlyArray<Pick<AuditColumnDefinition, "alias" | "filter">>,
+  declared?: ReadonlyArray<AuditFilterLink | null> | null,
+): AuditFilterLink[] {
+  const filtered = new Set(columns.filter((column) => column.filter).map((column) => column.alias));
+  const chain: AuditFilterLink[] = [];
+  for (const link of declared ?? []) {
+    const alias = (link?.column ?? "").trim();
+    if (!filtered.has(alias) || chain.some((item) => item.column === alias)) continue;
+    chain.push({ column: alias, joiner: (link!.joiner ?? "").toLowerCase() === "or" ? "or" : "and" });
+  }
+  for (const column of columns) {
+    if (column.filter && !chain.some((item) => item.column === column.alias)) {
+      chain.push({ column: column.alias });
+    }
+  }
+  chain.forEach((link, index) => {
+    link.joiner = index === chain.length - 1 ? null : link.joiner ?? "and";
+  });
+  return chain;
 }
 
 export function reconcileColumns(
@@ -129,6 +160,7 @@ export function querySignature(definition: AuditDefinition, isShared: boolean): 
     cultures: value.allCultures ? null : [...value.cultures ?? []].map(culture => culture.toLowerCase()).sort(),
     rowFilters: (value.rowFilters ?? []).filter(item => item.filter).map(column)
       .sort((a, b) => a.alias.localeCompare(b.alias)),
+    filterChain: (value.filterChain ?? []).map((link) => `${link.column}:${link.joiner ?? ""}`),
     hidden: [...value.hiddenBaseColumns ?? []].sort(),
   });
 }

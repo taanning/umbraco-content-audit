@@ -115,6 +115,29 @@ class TestBuilderHost extends UmbLitElement {
   }
 }
 
+const chainedAudit: AuditResponse = {
+  ...ownerAudit,
+  definition: {
+    schemaVersion: 3,
+    allDocumentTypes: false,
+    allElementTypes: false,
+    types: [{ kind: 'document', alias: 'article' }],
+    columns: [
+      { alias: 'title', valueType: 'text', filter: { operator: 'isEmpty' } },
+      { alias: 'author', valueType: 'text', filter: { operator: 'isEmpty' } },
+    ],
+    culture: null,
+    allCultures: true,
+    cultures: null,
+    rowFilters: [],
+    filterChain: [
+      { column: 'title', joiner: 'or' },
+      { column: 'author', joiner: null },
+    ],
+    hiddenBaseColumns: [],
+  },
+};
+
 describe('property-audit-builder', () => {
   const proto = PropertyAuditRepository.prototype;
   let originals: Record<string, unknown> = {};
@@ -304,6 +327,57 @@ describe('property-audit-builder', () => {
     expect((el as any)._dirty).to.be.true;
     expect((el as any)._columns.map((c: any) => c.alias)).to.deep.equal(['title', 'author']);
     expect((el as any).audit.version).to.equal(3);
+  });
+
+  it('shows the collapsed chain sentence and expands to one row per filter', async () => {
+    const el = await createBuilder(chainedAudit);
+    await flush(el);
+    const sentence = el.shadowRoot!.querySelector('.chain-sentence')!;
+    expect(sentence.textContent).to.include('propertyAudit_joinerOr');
+    expect(sentence.textContent).to.include('Title');
+    expect(sentence.textContent).to.include('Author');
+    (el.shadowRoot!.querySelector('.chain-toggle') as HTMLElement).click();
+    await flush(el);
+    expect((el as any)._chainExpanded).to.be.true;
+    const rows = el.shadowRoot!.querySelectorAll('.chain-row');
+    expect(rows).to.have.length(2);
+    expect(el.shadowRoot!.querySelectorAll('.chain-joiner')).to.have.length(1);
+    expect((el.shadowRoot!.querySelector('.chain-joiner') as any).value).to.equal('or');
+  });
+
+  it('joiner changes, reorder and chip removal update the chain and rerun', async () => {
+    let runs = 0;
+    (proto as any).createRun = () => {
+      runs++;
+      return Promise.resolve({ runId: 'r-default', status: 'completed', scannedCount: 0, matchedCount: 0, totalCount: 0, warnings: [] });
+    };
+    const el = await createBuilder(chainedAudit);
+    await flush(el);
+    const baselineRuns = runs;
+
+    (el as any)._chainExpanded = true;
+    await el.updateComplete;
+    const joiner = el.shadowRoot!.querySelector('.chain-joiner') as HTMLSelectElement;
+    joiner.value = 'and';
+    joiner.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+    await flush(el);
+    expect(runs).to.equal(baselineRuns + 1);
+    expect((el as any)._filterChain.map((link: any) => link.joiner)).to.deep.equal(['and', null]);
+
+    const rows = el.shadowRoot!.querySelectorAll('.chain-row');
+    rows[0].dispatchEvent(new DragEvent('dragstart', { bubbles: true, composed: true }));
+    rows[1].dispatchEvent(new DragEvent('drop', { bubbles: true, composed: true }));
+    await flush(el);
+    expect(runs).to.equal(baselineRuns + 2);
+    expect((el as any)._filterChain.map((link: any) => `${link.column}:${link.joiner ?? ''}`))
+      .to.deep.equal(['author:and', 'title:']);
+
+    (el.shadowRoot!.querySelector('.chain-remove') as HTMLElement).click();
+    await flush(el);
+    expect(runs).to.equal(baselineRuns + 3);
+    expect((el as any)._filterChain).to.deep.equal([{ column: 'title', joiner: null }]);
+    expect((el as any)._columns.find((column: any) => column.alias === 'author').filterMode)
+      .to.equal('none');
   });
 
   it('a stale preference response cannot erase a newer colour edit', async () => {

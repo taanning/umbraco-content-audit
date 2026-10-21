@@ -5,7 +5,7 @@ import './audit-results.element.js';
 import './audit-overview.element.js';
 import type { AuditConfigPanelElement } from './audit-config-panel.element.js';
 import type { AuditCatalogResponse, AuditResponse } from '../api/index.js';
-import { availableColumns, newTableDefinition, reconcileColumns, tableDefinition, visibleSortKey, type PanelRequest } from './audit-table-state.js';
+import { availableColumns, newTableDefinition, normalizedFilterChain, querySignature, reconcileColumns, tableDefinition, visibleSortKey, type PanelRequest } from './audit-table-state.js';
 
 const property = (alias: string) => ({
   alias, name: alias, editorAlias: 'Umbraco.TextBox', valueTypeHint: 'text',
@@ -134,6 +134,86 @@ describe('table-first state and inline panels', () => {
     expect(visibleSortKey(definition, 'property:title')).to.equal('kind');
     definition.hiddenBaseColumns = ['kind'];
     expect(visibleSortKey(definition, 'kind')).to.equal('typeName');
+  });
+
+  it('keeps declared chain order, defaults missing joiners to and, clears the last one', () => {
+    const columns = [
+      { alias: 'seoTitle', filter: { operator: 'isEmpty' } },
+      { alias: 'seoDescription', filter: { operator: 'isEmpty' } },
+      { alias: 'seoKeywords', filter: { operator: 'isEmpty' } },
+    ];
+    const chain = normalizedFilterChain(columns, [
+      { column: 'seoDescription', joiner: 'or' },
+      { column: 'seoTitle', joiner: 'and' },
+      { column: 'seoKeywords' },
+    ]);
+    expect(chain.map(link => `${link.column}:${link.joiner ?? ''}`))
+      .to.deep.equal(['seoDescription:or', 'seoTitle:and', 'seoKeywords:']);
+  });
+
+  it('derives a plain AND chain for legacy definitions without filterChain', () => {
+    const columns = [
+      { alias: 'seoTitle', filter: { operator: 'isEmpty' } },
+      { alias: 'seoDescription', filter: { operator: 'isEmpty' } },
+      { alias: 'plain', filter: null },
+    ];
+    const chain = normalizedFilterChain(columns, null);
+    expect(chain.map(link => `${link.column}:${link.joiner ?? ''}`))
+      .to.deep.equal(['seoTitle:and', 'seoDescription:']);
+    expect(tableDefinition({
+      ...newTableDefinition(catalog), columns, filterChain: undefined,
+    }).filterChain).to.deep.equal(chain);
+  });
+
+  it('drops chain entries whose filter was removed, skips unknown and duplicate aliases', () => {
+    const columns = [
+      { alias: 'seoTitle', filter: { operator: 'isEmpty' } },
+      { alias: 'seoDescription', filter: null },
+    ];
+    const chain = normalizedFilterChain(columns, [
+      { column: 'seoTitle', joiner: 'or' },
+      { column: 'seoDescription', joiner: 'or' },
+      { column: '  ', joiner: 'or' },
+      { column: 'seoTitle', joiner: 'and' },
+      { column: 'missing' },
+    ]);
+    expect(chain).to.deep.equal([{ column: 'seoTitle', joiner: null }]);
+  });
+
+  it('treats unrecognised joiner values as and', () => {
+    const columns = [
+      { alias: 'a', filter: { operator: 'isEmpty' } },
+      { alias: 'b', filter: { operator: 'isEmpty' } },
+    ];
+    const chain = normalizedFilterChain(columns, [
+      { column: 'a', joiner: 'OR' },
+      { column: 'b', joiner: 'xor' },
+    ]);
+    expect(chain.map(link => link.joiner)).to.deep.equal(['or', null]);
+  });
+
+  it('changes the query signature when chain order or joiners change', () => {
+    const base = newTableDefinition(catalog);
+    base.columns = [
+      { alias: 'title', valueType: 'text', filter: { operator: 'isEmpty' } },
+      { alias: 'articleNotes', valueType: 'text', filter: { operator: 'isEmpty' } },
+    ];
+    base.filterChain = [
+      { column: 'title', joiner: 'and' },
+      { column: 'articleNotes', joiner: null },
+    ];
+    const reordered = { ...base, filterChain: [
+      { column: 'articleNotes', joiner: 'and' },
+      { column: 'title', joiner: null },
+    ] };
+    const orChain = { ...base, filterChain: [
+      { column: 'title', joiner: 'or' },
+      { column: 'articleNotes', joiner: null },
+    ] };
+    const signature = querySignature(base, false);
+    expect(querySignature(reordered, false)).not.to.equal(signature);
+    expect(querySignature(orChain, false)).not.to.equal(signature);
+    expect(querySignature({ ...base, filterChain: null }, false)).to.equal(signature);
   });
 
   it('preserves the chosen property-column order when changing type scope', () => {

@@ -17,6 +17,7 @@ import type {
   PropertyAuditTypeModel as AuditTypeModel,
   AuditTypeSelection,
   AuditColumnDefinition,
+  AuditFilterLink,
 } from "../api/index.js";
 import {
   normalizeError,
@@ -25,8 +26,9 @@ import {
 import "./audit-results.element.js";
 import "./audit-config-panel.element.js";
 import {
-  activeFilterKeys, BASE_COLUMNS, newTableDefinition, querySignature, reconcileColumns,
-  sanitizeHiddenBaseColumns, tableDefinition, visibleSortKey,
+  activeFilterKeys, BASE_COLUMNS, newTableDefinition, normalizedFilterChain,
+  querySignature, reconcileColumns, sanitizeHiddenBaseColumns, tableDefinition,
+  visibleSortKey,
   type PanelRequest, type PanelSubmit,
 } from "./audit-table-state.js";
 
@@ -66,6 +68,9 @@ export class AuditBuilderElement extends UmbLitElement {
   @state() private _cultures: string[] | null = null;
   @state() private _rowFilters: AuditColumnDefinition[] = [];
   @state() private _hiddenBaseColumns: string[] = [];
+  @state() private _filterChain: AuditFilterLink[] = [];
+  @state() private _chainExpanded = false;
+  #chainDragIndex: number | null = null;
   @state() private _panel?: PanelRequest;
   @state() private _runError = "";
   #newInitialized = false;
@@ -177,6 +182,7 @@ export class AuditBuilderElement extends UmbLitElement {
       expression: column.filter?.expression ?? "",
     }));
     this._culture = definition.culture ?? "";
+    this._filterChain = normalizedFilterChain(definition.columns, definition.filterChain);
     const sort = visibleSortKey(definition, this._sortBy);
     if (sort !== this._sortBy) {
       this._sortBy = sort;
@@ -257,31 +263,33 @@ export class AuditBuilderElement extends UmbLitElement {
   }
 
   #definitionSnapshot(): AuditDefinition {
+    const columns: AuditColumnDefinition[] = this._columns.map((column) => ({
+      alias: column.alias,
+      valueType: column.valueType,
+      filter:
+        column.filterMode === "none"
+          ? null
+          : column.filterMode === "expression"
+            ? { operator: "equals", value: null, expression: column.expression }
+            : {
+                operator: column.operator,
+                value: ["isEmpty", "hasText"].includes(column.operator)
+                  ? null
+                  : column.value,
+                expression: null,
+              },
+    }));
     return {
       schemaVersion: 3,
       allDocumentTypes: this._allDocumentTypes,
       allElementTypes: this._allElementTypes,
       types: this._selectedTypes.map((t) => ({ kind: t.kind, alias: t.alias })),
-      columns: this._columns.map((column) => ({
-        alias: column.alias,
-        valueType: column.valueType,
-        filter:
-          column.filterMode === "none"
-            ? null
-            : column.filterMode === "expression"
-              ? { operator: "equals", value: null, expression: column.expression }
-              : {
-                  operator: column.operator,
-                  value: ["isEmpty", "hasText"].includes(column.operator)
-                    ? null
-                    : column.value,
-                  expression: null,
-                },
-      })),
+      columns,
       culture: this._culture === "" ? null : this._culture,
       allCultures: this._allCultures,
       cultures: this._cultures,
       rowFilters: this._rowFilters,
+      filterChain: normalizedFilterChain(columns, this._filterChain),
       hiddenBaseColumns: this._hiddenBaseColumns,
     };
   }
@@ -311,15 +319,39 @@ export class AuditBuilderElement extends UmbLitElement {
     this._skip = 0;
   }
 
-  #describeFilter(column: AuditColumnDefinition, name: string): string {
-    const filter = column.filter;
+  #linkDetail(column: AuditColumnDefinition | undefined): string {
+    const filter = column?.filter;
     if (!filter) return "";
-    const detail = filter.expression != null
+    return filter.expression != null
       ? filter.expression
       : ["isEmpty", "hasText"].includes(filter.operator)
         ? this.localize.term(`propertyAudit_op_${filter.operator}`)
         : `${this.localize.term(`propertyAudit_op_${filter.operator}`)} ${JSON.stringify(filter.value ?? "")}`;
-    return `${name}: ${detail}`;
+  }
+
+  #describeFilter(column: AuditColumnDefinition, name: string): string {
+    const detail = this.#linkDetail(column);
+    return detail ? `${name}: ${detail}` : name;
+  }
+
+  #propertyName(alias: string): string {
+    return this.#availableColumns.find((column) => column.alias === alias)?.name ?? alias;
+  }
+
+  /** Left-to-right sentence of the chain, e.g. "A · is empty or B · is empty and C · has text". */
+  #chainSentence(separator = "·"): string {
+    const snapshot = this.#definitionSnapshot();
+    const chain = this.#chain;
+    return chain.map((link, index) => {
+      const column = snapshot.columns.find((item) => item.alias === link.column);
+      const name = this.#propertyName(link.column);
+      const detail = this.#linkDetail(column);
+      const describe = detail ? `${name} ${separator} ${detail}` : name;
+      if (index === 0) return describe;
+      const joiner = this.localize.term(chain[index - 1].joiner === "or"
+        ? "propertyAudit_joinerOr" : "propertyAudit_joinerAnd");
+      return `${joiner} ${describe}`;
+    }).join(" ");
   }
 
   #filterSummary(): string[] {
@@ -345,16 +377,15 @@ export class AuditBuilderElement extends UmbLitElement {
       const column = BASE_COLUMNS.find((item) => item.key === alias);
       return column ? this.localize.term(`propertyAudit_${column.label}`) : alias;
     };
-    const propertyName = (alias: string) => this.#availableColumns
-      .find((column) => column.alias === alias)?.name ?? alias;
 
+    const chainSentence = this.#chainSentence(":");
     return [
       `${this.localize.term("propertyAudit_type")}: ${typeText}`,
       `${this.localize.term("propertyAudit_culture")}: ${cultureText}`,
       ...this._rowFilters.filter((column) => column.filter)
         .map((column) => this.#describeFilter(column, baseLabel(column.alias))),
-      ...this.#definitionSnapshot().columns.filter((column) => column.filter)
-        .map((column) => this.#describeFilter(column, propertyName(column.alias))),
+      ...(chainSentence === "" ? []
+        : [this.#chain.length > 1 ? `(${chainSentence})` : chainSentence]),
     ];
   }
 
@@ -544,6 +575,48 @@ export class AuditBuilderElement extends UmbLitElement {
     this._cultures = null;
     this.#markDirty();
     void this.#onRun();
+  }
+
+  // ---- filter chain -----------------------------------------------------------
+
+  /** Chain in display order, synced against the columns that still have filters. */
+  get #chain(): AuditFilterLink[] {
+    return normalizedFilterChain(this.#definitionSnapshot().columns, this._filterChain);
+  }
+
+  get #chainBusy(): boolean {
+    return Boolean(this._panel) || this._running || this._resultsLoading || this._saving;
+  }
+
+  #applyChainEdit(): void {
+    this.#markDirty();
+    void this.#onRun();
+  }
+
+  #setJoiner(alias: string, joiner: string): void {
+    if (this.#chainBusy) return;
+    this._filterChain = this.#chain.map((link) =>
+      link.column === alias ? { ...link, joiner } : link);
+    this.#applyChainEdit();
+  }
+
+  #moveLink(from: number, to: number): void {
+    if (this.#chainBusy || from === to) return;
+    const columns = this.#definitionSnapshot().columns;
+    const reordered = [...this.#chain];
+    if (from < 0 || from >= reordered.length) return;
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+    this._filterChain = normalizedFilterChain(columns, reordered);
+    this.#applyChainEdit();
+  }
+
+  #removeChainLink(alias: string): void {
+    if (this.#chainBusy) return;
+    this._filterChain = this.#chain.filter((link) => link.column !== alias);
+    this._columns = this._columns.map((column) =>
+      column.alias === alias ? { ...column, filterMode: "none" } : column);
+    this.#applyChainEdit();
   }
 
   async #onDelete(): Promise<void> {
@@ -825,6 +898,77 @@ export class AuditBuilderElement extends UmbLitElement {
 
   // ---- rendering ---------------------------------------------------------------
 
+  #linkChip(alias: string): string {
+    const column = this.#definitionSnapshot().columns.find((item) => item.alias === alias);
+    const name = this.#propertyName(alias);
+    const detail = this.#linkDetail(column);
+    return detail ? `${name} · ${detail}` : name;
+  }
+
+  #renderFilterChain() {
+    const chain = this.#chain;
+    if (chain.length === 0) return "";
+    const busy = this.#chainBusy;
+    const expanded = this._chainExpanded;
+    return html`<section class="filter-chain">
+      <uui-button class="chain-toggle" look="default" compact
+        label=${this.localize.term("propertyAudit_activeFilters")}
+        aria-expanded=${expanded ? "true" : "false"}
+        ?disabled=${busy}
+        @click=${() => { this._chainExpanded = !expanded; }}
+      ><uui-icon name=${expanded ? "icon-navigation-down" : "icon-navigation-right"}></uui-icon>
+        ${this.localize.term("propertyAudit_activeFilters")} (${chain.length})</uui-button>
+      ${!expanded
+        ? html`<p class="chain-sentence">${this.#chainSentence()}</p>`
+        : html`<ol class="chain-rows">
+            ${chain.map((link, index) => html`
+              <li class="chain-row" draggable=${busy ? "false" : "true"}
+                @dragstart=${(event: DragEvent) => {
+                  this.#chainDragIndex = index;
+                  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+                }}
+                @dragover=${(event: DragEvent) => {
+                  event.preventDefault();
+                  if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+                }}
+                @drop=${(event: DragEvent) => {
+                  event.preventDefault();
+                  if (this.#chainDragIndex !== null) {
+                    this.#moveLink(this.#chainDragIndex, index);
+                  }
+                }}
+                @dragend=${() => { this.#chainDragIndex = null; }}
+              >
+                <uui-icon class="chain-grip" name="icon-navigation"
+                  title=${this.localize.term("propertyAudit_reorderFilter")}></uui-icon>
+                <uui-tag class="chain-chip">${this.#linkChip(link.column)}</uui-tag>
+                <uui-button class="chain-remove" look="default" compact
+                  label=${this.localize.term("propertyAudit_removeFilter")}
+                  title=${this.localize.term("propertyAudit_removeFilter")}
+                  ?disabled=${busy}
+                  @click=${() => this.#removeChainLink(link.column)}
+                ><uui-icon name="icon-wrong"></uui-icon></uui-button>
+                ${index < chain.length - 1
+                  ? html`<uui-select class="chain-joiner"
+                      label=${this.localize.term("propertyAudit_filterJoiner")}
+                      .value=${link.joiner ?? "and"}
+                      .options=${["or", "and"].map((value) => ({
+                        name: this.localize.term(value === "or"
+                          ? "propertyAudit_joinerOr" : "propertyAudit_joinerAnd"),
+                        value,
+                        selected: link.joiner === value,
+                      }))}
+                      ?disabled=${busy}
+                      @change=${(event: Event) => this.#setJoiner(
+                        link.column, (event.target as HTMLSelectElement).value)}
+                    ></uui-select>`
+                  : ""}
+              </li>`)}
+          </ol>
+          <p class="chain-hint">${this.localize.term("propertyAudit_chainOrderHint")}</p>`}
+    </section>`;
+  }
+
   #renderConfigPanel(embedded = false) {
     if (!this._panel || !this.catalog) return "";
     return html`<property-audit-config-panel
@@ -932,6 +1076,8 @@ export class AuditBuilderElement extends UmbLitElement {
           : ""}
       </uui-box>` : ""}
 
+      ${this.#renderFilterChain()}
+
       ${this._panel?.kind !== "save" ? this.#renderConfigPanel() : ""}
 
       <uui-box class="results-box">
@@ -1030,6 +1176,49 @@ export class AuditBuilderElement extends UmbLitElement {
     
     .results-box {
       margin-top: var(--uui-size-space-5);
+    }
+    .filter-chain {
+      margin-top: var(--uui-size-space-5);
+    }
+    .chain-toggle uui-icon {
+      margin-inline-end: var(--uui-size-space-2);
+    }
+    .chain-sentence {
+      margin: var(--uui-size-space-2) 0 0 var(--uui-size-space-5);
+    }
+    .chain-rows {
+      list-style: none;
+      margin: var(--uui-size-space-3) 0 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: var(--uui-size-space-2);
+      max-width: 46em;
+    }
+    .chain-row {
+      display: flex;
+      align-items: center;
+      gap: var(--uui-size-space-3);
+      padding: var(--uui-size-space-2) var(--uui-size-space-3);
+      border: var(--uui-size-border-width, 1px) solid var(--uui-color-border);
+      border-radius: var(--uui-border-radius);
+      background: var(--uui-color-surface);
+    }
+    .chain-grip {
+      cursor: grab;
+      color: var(--uui-color-text-alt);
+    }
+    .chain-chip {
+      flex: 1;
+      --uui-tag-font-size: var(--uui-type-small-size);
+    }
+    .chain-joiner {
+      width: 6em;
+    }
+    .chain-hint {
+      margin: var(--uui-size-space-2) 0 0;
+      font-size: var(--uui-type-small-size);
+      color: var(--uui-color-text-alt);
     }
     .audit-summary.required {
       border: var(--uui-size-border-width, 1px) solid var(--uui-color-danger);

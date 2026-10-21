@@ -131,6 +131,7 @@ export type AuditDefinition = {
     allCultures: boolean;
     cultures?: Array<string> | null;
     rowFilters: Array<AuditColumnDefinition>;
+    filterChain?: Array<AuditFilterLink> | null;
     hiddenBaseColumns: Array<string>;
 };
 
@@ -237,6 +238,11 @@ export type AuditColumnFilter = {
     operator: string;
     value?: string | null;
     expression?: string | null;
+};
+
+export type AuditFilterLink = {
+    column: string;
+    joiner?: string | null;
 };
 
 export type GetPropertyAuditAuditData = {
