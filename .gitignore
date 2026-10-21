@@ -67,3 +67,6 @@ src/PropertyAuditTool/wwwroot/App_Plugins/PropertyAuditTool/
 *.tmp
 *.log
 nul
+
+# Local test-site demo content (seeded by tools/demo-*.mjs, not shipped)
+src/PropertyAuditTool.TestSite/uSync/
