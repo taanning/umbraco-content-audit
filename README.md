@@ -14,6 +14,17 @@ The audit dashboard lets editors and developers:
 
 All audit results are authorized as the current viewer. Saved definitions and dashboard preferences are stored in package-owned tables; CMS content is never modified.
 
+## Filtering
+
+Every column header in the results table has a filter button. Click it to open that column's filter panel — this works on the base columns (type, type name, content, culture, location) and on every property column.
+
+The panel offers two modes:
+
+- **Simple** - pick an operator and a value: has text, is empty, equals, not equals, contains, not contains, starts with, ends with, like, or the numeric comparisons `>`, `>=`, `<`, `<=`.
+- **Expression** - one validated comparison written out, e.g. `= 'travel'`, `!= ''` (has a value), `> 80`, or `LIKE '%promo%'`. Quote text and date values; numbers and booleans stand unquoted.
+
+Edits are staged inside the panel: nothing re-scans until Apply, Cancel discards them, and Clear filters removes every column filter at once. The Filter rows box narrows only the already loaded page, client-side.
+
 ## Package
 
 Current package metadata:
