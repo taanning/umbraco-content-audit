@@ -508,6 +508,161 @@ public class AuditExecutionServiceTests
     }
 
     [Fact]
+    public async Task FilterChain_Or_MatchesEitherFilter()
+    {
+        var fixture = new RunFixture();
+        var type = DocType("article", 1, compositionProperties: new[] { TextProp("title"), TextProp("author") });
+        fixture.ContentTypes = new[] { type };
+        fixture.Languages = new[] { TestBuilders.Language("en-US") };
+        fixture.Nodes.Add(Doc(1, type, "title only",
+            new Dictionary<string, object?> { ["title"] = "abc", ["author"] = "bob" }).Object);
+        fixture.Nodes.Add(Doc(2, type, "author only",
+            new Dictionary<string, object?> { ["title"] = "xyz", ["author"] = "ann" }).Object);
+        fixture.Nodes.Add(Doc(3, type, "neither",
+            new Dictionary<string, object?> { ["title"] = "xyz", ["author"] = "bob" }).Object);
+        var service = fixture.Create();
+        var definition = Definition(columns: new List<AuditColumnDefinition>
+        {
+            Column("title", filter: new AuditColumnFilter { Operator = "contains", Value = "ab" }),
+            Column("author", filter: new AuditColumnFilter { Operator = "equals", Value = "ann" }),
+        });
+        definition.FilterChain =
+        [
+            new() { Column = "title", Joiner = "or" },
+            new() { Column = "author" },
+        ];
+
+        var created = await service.CreateAsync(UserA(), Draft(definition), CancellationToken.None);
+        var advance = await service.AdvanceAsync(UserA(), created.Value!.RunId, CancellationToken.None);
+
+        Assert.Equal(2, advance.Value!.TotalCount);
+    }
+
+    [Fact]
+    public async Task FilterChain_MixedJoiners_FoldLeftToRight()
+    {
+        // title=a OR author=x AND rating>5 folds as ((title=a OR author=x) AND rating>5).
+        var fixture = new RunFixture();
+        var type = DocType("article", 1, compositionProperties:
+            new[] { TextProp("title"), TextProp("author"), TextProp("rating") });
+        fixture.ContentTypes = new[] { type };
+        fixture.Languages = new[] { TestBuilders.Language("en-US") };
+        fixture.Nodes.Add(Doc(1, type, "first only",
+            new Dictionary<string, object?> { ["title"] = "a", ["author"] = "y", ["rating"] = 1 }).Object);
+        fixture.Nodes.Add(Doc(2, type, "middle and last",
+            new Dictionary<string, object?> { ["title"] = "z", ["author"] = "x", ["rating"] = 9 }).Object);
+        var service = fixture.Create();
+        var definition = Definition(columns: new List<AuditColumnDefinition>
+        {
+            Column("title", filter: new AuditColumnFilter { Operator = "equals", Value = "a" }),
+            Column("author", filter: new AuditColumnFilter { Operator = "equals", Value = "x" }),
+            Column("rating", valueType: "number", filter: new AuditColumnFilter { Operator = "greaterThan", Value = "5" }),
+        });
+        definition.FilterChain =
+        [
+            new() { Column = "title", Joiner = "or" },
+            new() { Column = "author", Joiner = "and" },
+            new() { Column = "rating" },
+        ];
+
+        var created = await service.CreateAsync(UserA(), Draft(definition), CancellationToken.None);
+        var advance = await service.AdvanceAsync(UserA(), created.Value!.RunId, CancellationToken.None);
+
+        Assert.Equal(1, advance.Value!.TotalCount);
+    }
+
+    [Fact]
+    public async Task FilterChain_Reorder_ChangesSemantics()
+    {
+        // Same filters, reordered: (author=x AND rating>5) OR title=a.
+        var fixture = new RunFixture();
+        var type = DocType("article", 1, compositionProperties:
+            new[] { TextProp("title"), TextProp("author"), TextProp("rating") });
+        fixture.ContentTypes = new[] { type };
+        fixture.Languages = new[] { TestBuilders.Language("en-US") };
+        fixture.Nodes.Add(Doc(1, type, "first only",
+            new Dictionary<string, object?> { ["title"] = "a", ["author"] = "y", ["rating"] = 1 }).Object);
+        fixture.Nodes.Add(Doc(2, type, "middle and last",
+            new Dictionary<string, object?> { ["title"] = "z", ["author"] = "x", ["rating"] = 9 }).Object);
+        var service = fixture.Create();
+        var definition = Definition(columns: new List<AuditColumnDefinition>
+        {
+            Column("title", filter: new AuditColumnFilter { Operator = "equals", Value = "a" }),
+            Column("author", filter: new AuditColumnFilter { Operator = "equals", Value = "x" }),
+            Column("rating", valueType: "number", filter: new AuditColumnFilter { Operator = "greaterThan", Value = "5" }),
+        });
+        definition.FilterChain =
+        [
+            new() { Column = "author", Joiner = "and" },
+            new() { Column = "rating", Joiner = "or" },
+            new() { Column = "title" },
+        ];
+
+        var created = await service.CreateAsync(UserA(), Draft(definition), CancellationToken.None);
+        var advance = await service.AdvanceAsync(UserA(), created.Value!.RunId, CancellationToken.None);
+
+        Assert.Equal(2, advance.Value!.TotalCount);
+    }
+
+    [Fact]
+    public async Task FilterChain_NullChain_DefaultsToAllAnd()
+    {
+        var fixture = new RunFixture();
+        var type = DocType("article", 1, compositionProperties: new[] { TextProp("title"), TextProp("author") });
+        fixture.ContentTypes = new[] { type };
+        fixture.Languages = new[] { TestBuilders.Language("en-US") };
+        fixture.Nodes.Add(Doc(1, type, "both",
+            new Dictionary<string, object?> { ["title"] = "abc", ["author"] = "ann" }).Object);
+        fixture.Nodes.Add(Doc(2, type, "half",
+            new Dictionary<string, object?> { ["title"] = "abc", ["author"] = "bob" }).Object);
+        var service = fixture.Create();
+        var definition = Definition(columns: new List<AuditColumnDefinition>
+        {
+            Column("title", filter: new AuditColumnFilter { Operator = "contains", Value = "ab" }),
+            Column("author", filter: new AuditColumnFilter { Operator = "equals", Value = "ann" }),
+        });
+        definition.FilterChain = null;
+
+        var created = await service.CreateAsync(UserA(), Draft(definition), CancellationToken.None);
+        var advance = await service.AdvanceAsync(UserA(), created.Value!.RunId, CancellationToken.None);
+
+        Assert.Equal(1, advance.Value!.TotalCount);
+    }
+
+    [Fact]
+    public async Task FilterChain_BaseColumnFilters_RemainAndGate()
+    {
+        // Row filters stay AND-only scope even when the column chain uses OR.
+        var fixture = new RunFixture();
+        var type = DocType("article", 1, compositionProperties: new[] { TextProp("title"), TextProp("author") });
+        fixture.ContentTypes = new[] { type };
+        fixture.Languages = new[] { TestBuilders.Language("en-US") };
+        fixture.Nodes.Add(Doc(1, type, "keep this",
+            new Dictionary<string, object?> { ["title"] = "", ["author"] = "ann" }).Object);
+        fixture.Nodes.Add(Doc(2, type, "drop this",
+            new Dictionary<string, object?> { ["title"] = "", ["author"] = "ann" }).Object);
+        var service = fixture.Create();
+        var definition = Definition(columns: new List<AuditColumnDefinition>
+        {
+            Column("title", filter: new AuditColumnFilter { Operator = "isEmpty" }),
+            Column("author", filter: new AuditColumnFilter { Operator = "isEmpty" }),
+        });
+        definition.SchemaVersion = 3;
+        definition.Cultures = [""];
+        definition.RowFilters = [Column("content", filter: new() { Operator = "contains", Value = "keep" })];
+        definition.FilterChain =
+        [
+            new() { Column = "title", Joiner = "or" },
+            new() { Column = "author" },
+        ];
+
+        var created = await service.CreateAsync(UserA(), Draft(definition), CancellationToken.None);
+        var advance = await service.AdvanceAsync(UserA(), created.Value!.RunId, CancellationToken.None);
+
+        Assert.Equal(1, advance.Value!.TotalCount);
+    }
+
+    [Fact]
     public async Task EmptyValue_DistinctFromNotApplicable()
     {
         var fixture = new RunFixture();

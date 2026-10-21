@@ -25,7 +25,24 @@ public sealed class AuditDefinition
 
     public List<AuditColumnDefinition> RowFilters { get; set; } = new();
 
+    /// <summary>Ordered property-column filter chain evaluated left to right;
+    /// each link's joiner connects it to the next link. Null derives the chain
+    /// from filtered columns in column order with implicit "and" joins —
+    /// identical to the pre-chain behaviour.</summary>
+    public List<AuditFilterLink>? FilterChain { get; set; }
+
     public List<string> HiddenBaseColumns { get; set; } = new();
+}
+
+/// <summary>One link in the ordered filter chain.</summary>
+public sealed class AuditFilterLink
+{
+    /// <summary>Alias of a filtered column in <see cref="AuditDefinition.Columns"/>.</summary>
+    public required string Column { get; set; }
+
+    /// <summary>"and" or "or" — how this link combines with the next link.
+    /// Null terminates the chain (last link).</summary>
+    public string? Joiner { get; set; }
 }
 
 public sealed class AuditTypeSelection

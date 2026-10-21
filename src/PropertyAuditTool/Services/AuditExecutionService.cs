@@ -79,6 +79,8 @@ public sealed class AuditExecutionService
         public bool MultiCulture { get; init; }
         public IReadOnlyDictionary<string, AuditCompiledFilter> RowFilters { get; init; }
             = new Dictionary<string, AuditCompiledFilter>();
+        /// <summary>Ordered column-filter chain; folded left to right.</summary>
+        public required List<ResolvedLink> FilterChain { get; init; }
     }
 
     private sealed class ResolvedColumn
@@ -86,6 +88,13 @@ public sealed class AuditExecutionService
         public required string Alias { get; init; }
         public required string ValueType { get; init; }
         public AuditCompiledFilter? Filter { get; init; }
+    }
+
+    private sealed class ResolvedLink
+    {
+        public required ResolvedColumn Column { get; init; }
+        /// <summary>"and" or "or" — connects this link to the next.</summary>
+        public string? Joiner { get; init; }
     }
 
     private sealed class Resolution
@@ -294,6 +303,29 @@ public sealed class AuditExecutionService
             AuditFilterCompiler.TryCompile("text", filter.Operator, filter.Value, filter.Expression, out var compiled, out _);
             rowFilters[column.Alias] = compiled!;
         }
+
+        // Ordered filter chain: declared links first, then any filtered column
+        // missing from the declaration appended in column order.
+        var chained = new HashSet<string>(StringComparer.Ordinal);
+        var filterChain = new List<ResolvedLink>();
+        foreach (var link in definition.FilterChain ?? [])
+        {
+            var column = columns.FirstOrDefault(candidate =>
+                candidate.Filter is not null
+                && string.Equals(candidate.Alias, link?.Column, StringComparison.Ordinal));
+            if (column is not null && chained.Add(column.Alias))
+            {
+                filterChain.Add(new ResolvedLink { Column = column, Joiner = link!.Joiner });
+            }
+        }
+        foreach (var column in columns.Where(column => column.Filter is not null))
+        {
+            if (chained.Add(column.Alias))
+            {
+                filterChain.Add(new ResolvedLink { Column = column });
+            }
+        }
+
         return new Resolution
         {
             Plan = new ResolvedPlan
@@ -308,6 +340,7 @@ public sealed class AuditExecutionService
                 Cultures = cultures.Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 MultiCulture = multiCulture,
                 RowFilters = rowFilters,
+                FilterChain = filterChain,
             },
         };
     }
@@ -1183,24 +1216,21 @@ public sealed class AuditExecutionService
             };
             if (!filter.Matches(value)) return false;
         }
-        foreach (var column in plan.Columns)
+        bool? result = null;
+        for (var i = 0; i < plan.FilterChain.Count; i++)
         {
-            if (column.Filter is null)
-            {
-                continue;
-            }
-
+            var link = plan.FilterChain[i];
             var cell = row.Cells.First(candidate =>
-                string.Equals(candidate.Alias, column.Alias, StringComparison.Ordinal));
+                string.Equals(candidate.Alias, link.Column.Alias, StringComparison.Ordinal));
             var applicable = cell.Status != "notApplicable";
             var readable = cell.Status != "restricted";
-            if (!column.Filter.Matches(cell.RawValue, applicable, readable))
-            {
-                return false;
-            }
+            var match = link.Column.Filter!.Matches(cell.RawValue, applicable, readable);
+            result = result is null
+                ? match
+                : plan.FilterChain[i - 1].Joiner == "or" ? result.Value || match : result.Value && match;
         }
 
-        return true;
+        return result ?? true;
     }
 
     /// <summary>

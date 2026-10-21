@@ -143,6 +143,7 @@ public class SavedAuditService
                 AllCultures = definition.AllCultures,
                 Cultures = definition.Cultures,
                 RowFilters = definition.RowFilters,
+                FilterChain = definition.FilterChain,
                 HiddenBaseColumns = definition.HiddenBaseColumns,
             },
             JsonOptions);
@@ -253,7 +254,50 @@ public class SavedAuditService
             }
         }
 
+        normalized.FilterChain = NormalizeFilterChain(definition.FilterChain, normalized.Columns);
         return normalized;
+    }
+
+    /// <summary>
+    /// Materializes the ordered filter chain: declared links to unfiltered or
+    /// unknown columns and duplicates are dropped, filtered columns missing
+    /// from the declared chain are appended, and joiners are lowercased with
+    /// the last link's joiner forced to null.
+    /// </summary>
+    private static List<AuditFilterLink> NormalizeFilterChain(
+        List<AuditFilterLink>? declared, List<AuditColumnDefinition> columns)
+    {
+        var filtered = new HashSet<string>(
+            columns.Where(column => column is not null && column.Filter is not null)
+                .Select(column => column.Alias),
+            StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var chain = new List<AuditFilterLink>();
+        foreach (var link in declared ?? [])
+        {
+            var alias = link?.Column?.Trim() ?? string.Empty;
+            if (link is null || !filtered.Contains(alias) || !seen.Add(alias))
+            {
+                continue;
+            }
+            chain.Add(new AuditFilterLink
+            {
+                Column = alias,
+                Joiner = link.Joiner?.Trim().ToLowerInvariant(),
+            });
+        }
+        foreach (var column in columns)
+        {
+            if (column?.Filter is not null && seen.Add(column.Alias))
+            {
+                chain.Add(new AuditFilterLink { Column = column.Alias });
+            }
+        }
+        for (var i = 0; i < chain.Count; i++)
+        {
+            chain[i].Joiner = i == chain.Count - 1 ? null : chain[i].Joiner ?? "and";
+        }
+        return chain;
     }
 
     public SavedAuditCreateResult Create(IUser user, AuditWriteRequest request)
@@ -570,6 +614,34 @@ public class SavedAuditService
             if (column.Filter is { } filter
                 && !AuditFilterCompiler.TryCompile("text", filter.Operator, filter.Value, filter.Expression, out _, out var error))
                 Add("definition.rowFilters", error ?? "Invalid base-column filter.");
+        }
+
+        var chain = definition.FilterChain ?? [];
+        if (chain.Count > maxColumns)
+        {
+            Add("definition.filterChain", $"At most {maxColumns} filter links are allowed.");
+        }
+        for (var i = 0; i < chain.Count; i++)
+        {
+            var link = chain[i];
+            var field = $"definition.filterChain[{i}]";
+            if (link is null)
+            {
+                Add(field, "Filter link is required.");
+                continue;
+            }
+            if (string.IsNullOrEmpty(link.Column?.Trim()))
+            {
+                Add($"{field}.column", "A column alias is required.");
+            }
+            else if (link.Column.Trim().Length > MaxAliasLength)
+            {
+                Add($"{field}.column", $"Column alias must be {MaxAliasLength} characters or fewer.");
+            }
+            if (link.Joiner is not null && link.Joiner is not ("and" or "or"))
+            {
+                Add($"{field}.joiner", "Joiner must be 'and' or 'or'.");
+            }
         }
 
         return errors;

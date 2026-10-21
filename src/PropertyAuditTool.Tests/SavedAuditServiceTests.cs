@@ -759,6 +759,118 @@ public class SavedAuditServiceTests
         Assert.Empty(SavedAuditService.ValidateDefinition(definition));
     }
 
+    // ---- filter chain normalization / validation ----------------------------
+
+    private static AuditDefinition ChainDefinition()
+    {
+        var definition = Definition();
+        definition.SchemaVersion = 3;
+        definition.Columns =
+        [
+            new() { Alias = "a", ValueType = "text", Filter = new() { Operator = "isEmpty" } },
+            new() { Alias = "b", ValueType = "text" },
+            new() { Alias = "c", ValueType = "text", Filter = new() { Operator = "hasText" } },
+        ];
+        return definition;
+    }
+
+    [Fact]
+    public void Normalize_FilterChain_MaterializesFilteredColumnsInOrder()
+    {
+        var normalized = SavedAuditService.NormalizeDefinition(ChainDefinition());
+        Assert.Equal(
+            new[] { ("a", (string?)"and"), ("c", (string?)null) },
+            normalized.FilterChain!.Select(link => (link.Column, link.Joiner)));
+    }
+
+    [Fact]
+    public void Normalize_FilterChain_DropsDanglingAndDuplicateLinks_KeepsOrder()
+    {
+        var definition = ChainDefinition();
+        definition.FilterChain =
+        [
+            new() { Column = " c ", Joiner = "OR" },
+            new() { Column = "b", Joiner = "and" },   // unfiltered column: dropped
+            new() { Column = "ghost", Joiner = "or" }, // unknown column: dropped
+            new() { Column = "c", Joiner = "and" },   // duplicate: dropped
+        ];
+        var normalized = SavedAuditService.NormalizeDefinition(definition);
+        Assert.Equal(
+            new[] { ("c", (string?)"or"), ("a", (string?)null) },
+            normalized.FilterChain!.Select(link => (link.Column, link.Joiner)));
+    }
+
+    [Fact]
+    public void Normalize_FilterChain_NullJoiners_BecomeAnd_ExceptLast()
+    {
+        var definition = ChainDefinition();
+        definition.FilterChain =
+        [
+            new() { Column = "a" },
+            new() { Column = "c" },
+        ];
+        var normalized = SavedAuditService.NormalizeDefinition(definition);
+        Assert.Equal("and", normalized.FilterChain![0].Joiner);
+        Assert.Null(normalized.FilterChain![1].Joiner);
+    }
+
+    [Fact]
+    public void Normalize_FilterChain_NoFilters_EmptyChain()
+    {
+        var definition = Definition();
+        definition.SchemaVersion = 3;
+        var normalized = SavedAuditService.NormalizeDefinition(definition);
+        Assert.Empty(normalized.FilterChain!);
+    }
+
+    [Fact]
+    public void Validate_FilterChain_InvalidJoiner_IsError()
+    {
+        var definition = ChainDefinition();
+        definition.FilterChain =
+        [
+            new() { Column = "a", Joiner = "xor" },
+            new() { Column = "c" },
+        ];
+        var errors = SavedAuditService.ValidateDefinition(
+            SavedAuditService.NormalizeDefinition(definition));
+        Assert.Contains(errors.Keys, key => key.StartsWith("definition.filterChain"));
+    }
+
+    [Fact]
+    public void Validate_FilterChain_ValidJoiners_NoError()
+    {
+        var definition = ChainDefinition();
+        definition.FilterChain =
+        [
+            new() { Column = "a", Joiner = "or" },
+            new() { Column = "c" },
+        ];
+        var errors = SavedAuditService.ValidateDefinition(
+            SavedAuditService.NormalizeDefinition(definition));
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public void Serialize_IncludesFilterChain()
+    {
+        var definition = ChainDefinition();
+        definition.FilterChain =
+        [
+            new() { Column = "a", Joiner = "or" },
+            new() { Column = "c" },
+        ];
+        var normalized = SavedAuditService.NormalizeDefinition(definition);
+        var record = Record(UserAKey);
+        _store.Setup(s => s.Create(It.IsAny<SavedQueryRecord>())).Callback(
+            (SavedQueryRecord r) => record.Definition = r.Definition);
+        Service.Create(User(UserAKey), Write(definition: normalized));
+        var restored = SavedAuditService.DeserializeDefinition(record.Definition);
+        Assert.Equal(
+            new[] { ("a", (string?)"or"), ("c", (string?)null) },
+            restored.FilterChain!.Select(link => (link.Column, link.Joiner)));
+    }
+
     [Fact]
     public void PinningWithoutAColour_PreservesPreviousPersonalColour()
     {
