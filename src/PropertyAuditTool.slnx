@@ -1,0 +1,12 @@
+<Solution>
+  <Folder Name="/Solution Items/">
+    <File Path="../.github/CONTRIBUTING.md" />
+    <File Path="../CHANGELOG.md" />
+    <File Path="../docs/README_nuget.md" />
+    <File Path="../SECURITY.md" />
+    <File Path="../umbraco-marketplace.json" />
+  </Folder>
+  <Project Path="PropertyAuditTool.Tests/PropertyAuditTool.Tests.csproj" />
+  <Project Path="PropertyAuditTool.TestSite/PropertyAuditTool.TestSite.csproj" />
+  <Project Path="PropertyAuditTool/PropertyAuditTool.csproj" />
+</Solution>

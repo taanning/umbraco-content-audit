@@ -1,0 +1,32 @@
+{
+  "$schema": "https://marketplace.umbraco.com/umbraco-marketplace-schema.json",
+  "AuthorDetails": {
+    "Name": "Kim Gordon Taanning",
+    "ImageUrl": "https://github.com/taanning.png"
+  },
+  "Category": "Editor Tools",
+  "Description": "Read-only backoffice audit for finding incomplete or matching content across document types, element types, pages and blocks, with permission-aware filtering, saved audits and pinned dashboard tiles.",
+  "LicenseTypes": [ "Free" ],
+  "IssueTrackerUrl": "https://github.com/taanning/umbraco-content-audit/issues",
+  "PackageType": "Package",
+  "Tags": [ "audit", "content", "dashboard", "completeness", "search" ],
+  "Title": "Content Audit",
+  "Screenshots": [
+    {
+      "ImageUrl": "https://raw.githubusercontent.com/taanning/umbraco-content-audit/main/docs/screenshots/pinned-overview.png",
+      "Caption": "Pinned audit tiles and the saved audit list"
+    },
+    {
+      "ImageUrl": "https://raw.githubusercontent.com/taanning/umbraco-content-audit/main/docs/screenshots/filtered-results.png",
+      "Caption": "Filtered audit results across document and element types"
+    },
+    {
+      "ImageUrl": "https://raw.githubusercontent.com/taanning/umbraco-content-audit/main/docs/screenshots/type-panel.png",
+      "Caption": "Document and element type selection"
+    },
+    {
+      "ImageUrl": "https://raw.githubusercontent.com/taanning/umbraco-content-audit/main/docs/screenshots/culture-panel.png",
+      "Caption": "Culture selection for multilingual content"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "PropertyAuditTool",
+  "name": "Content Audit",
+  "version": "0.4.0",
+  "allowTelemetry": false,
+  "extensions": [
+    {
+      "name": "Property Audit Tool Bundle",
+      "alias": "PropertyAuditTool.Bundle",
+      "type": "bundle",
+      "js": "/App_Plugins/PropertyAuditTool/property-audit-tool.js"
+    }
+  ]
+}

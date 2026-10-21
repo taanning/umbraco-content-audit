@@ -1,0 +1,118 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <StaticWebAssetBasePath>/</StaticWebAssetBasePath>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Product>Umbraco.Community.PropertyAuditTool</Product>
+    <PackageId>Umbraco.Community.PropertyAuditTool</PackageId>
+    <Title>Content Audit</Title>
+    <Version>0.4.0</Version>
+    <Description>Read-only Umbraco backoffice audit for finding incomplete or matching content across document types, element types, pages and blocks.</Description>
+    <PackageTags>umbraco;umbraco-marketplace</PackageTags>
+    <Authors>Kim Gordon Taanning</Authors>
+    <Copyright>$([System.DateTime]::UtcNow.ToString(`yyyy`)) © Kim Gordon Taanning</Copyright>
+    <PackageProjectUrl>https://github.com/taanning/umbraco-content-audit</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/taanning/umbraco-content-audit</RepositoryUrl>
+    <PackageReadmeFile>README_nuget.md</PackageReadmeFile>
+    <RepositoryType>git</RepositoryType>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageIcon>icon.png</PackageIcon>
+  </PropertyGroup>
+
+
+
+  <!--
+    Compiled against the oldest supported CMS (17.0.0); dependency ranges let the
+    package install on every 17.x and 18.x host. No Swashbuckle/OpenAPI-handler
+    references: those types were removed in Umbraco 18, and the package rides the
+    built-in Management OpenAPI document instead.
+  -->
+  <ItemGroup>
+    <PackageReference Include="Umbraco.Cms.Api.Common" Version="[17.0.0,19.0.0)" />
+    <PackageReference Include="Umbraco.Cms.Api.Management" Version="[17.0.0,19.0.0)" />
+    <PackageReference Include="Umbraco.Cms.Infrastructure" Version="[17.0.0,19.0.0)" />
+    <PackageReference Include="Umbraco.Cms.Web.Common" Version="[17.0.0,19.0.0)" />
+    <PackageReference Include="Umbraco.Cms.Web.Website" Version="[17.0.0,19.0.0)" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Don't include the client folder as part of packaging nuget build -->
+    <Content Remove="Client\**" />
+
+    <!-- However make the Umbraco-package.json included for dotnet pack or nuget package and visible to the solution -->
+    <None Include="Client\public\umbraco-package.json" Pack="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Folder Include="wwwroot\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\docs\README_nuget.md">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+    <None Include="icon.png">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
+  </ItemGroup>
+
+  <!--
+    Client build integration.
+    - Runs `npm ci` only when package.json/package-lock.json change (tracked via
+      a stamp file), so regular dotnet builds don't touch npm.
+    - Runs `npm run build` when client sources/config change, tracked via item
+      group inputs and the emitted umbraco-package.json as the output stamp.
+    - RegisterClientAssets always runs immediately before
+      ResolveProjectStaticWebAssets and re-globs the generated wwwroot output at
+      target execution time, so a first clean `dotnet pack` still discovers
+      assets that did not exist when MSBuild evaluated the project.
+    - Set -p:SkipClientBuild=true to bypass npm for deliberate dev/test runs;
+      already-generated assets are still registered.
+  -->
+  <PropertyGroup>
+    <ClientDir>$(MSBuildProjectDirectory)\Client</ClientDir>
+    <ClientOutDir>$(MSBuildProjectDirectory)\wwwroot\App_Plugins\PropertyAuditTool</ClientOutDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <_ClientBuildInputs Include="$(ClientDir)\src\**" />
+    <_ClientBuildInputs Include="$(ClientDir)\public\**" />
+    <_ClientBuildInputs Include="$(ClientDir)\package.json" />
+    <_ClientBuildInputs Include="$(ClientDir)\vite.config.ts" />
+    <_ClientBuildInputs Include="$(ClientDir)\tsconfig.json" />
+    <_ClientBuildInputs Include="$(ClientDir)\openapi\**" />
+    <_ClientBuildInputs Include="$(ClientDir)\package-lock.json" />
+  </ItemGroup>
+
+  <Target Name="RestoreClientPackages"
+          Condition="'$(SkipClientBuild)' != 'true'"
+          Inputs="$(ClientDir)\package.json;$(ClientDir)\package-lock.json"
+          Outputs="$(ClientDir)\node_modules\.install-stamp">
+    <Exec Command="npm ci" WorkingDirectory="$(ClientDir)" />
+    <Touch Files="$(ClientDir)\node_modules\.install-stamp" AlwaysCreate="true" />
+  </Target>
+
+  <Target Name="BuildClientAssets"
+          DependsOnTargets="RestoreClientPackages"
+          Condition="'$(SkipClientBuild)' != 'true'"
+          Inputs="@(_ClientBuildInputs)"
+          Outputs="$(ClientOutDir)\umbraco-package.json">
+    <Exec Command="npm run build" WorkingDirectory="$(ClientDir)" />
+  </Target>
+
+  <Target Name="RegisterClientAssets"
+          DependsOnTargets="BuildClientAssets"
+          BeforeTargets="ResolveProjectStaticWebAssets">
+    <ItemGroup>
+      <Content Remove="wwwroot\App_Plugins\PropertyAuditTool\**" />
+      <Content Include="wwwroot\App_Plugins\PropertyAuditTool\**" />
+    </ItemGroup>
+  </Target>
+
+</Project>
