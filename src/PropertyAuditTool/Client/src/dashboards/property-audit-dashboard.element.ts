@@ -66,6 +66,15 @@ export class PropertyAuditDashboardElement extends UmbLitElement {
 
   async #enterHome(initial = false): Promise<void> {
     await this.#loadAll(initial);
+    void this.#refreshPinnedTiles();
+  }
+
+  /** Sequentially refreshes pinned tiles so home always shows fresh counts. */
+  async #refreshPinnedTiles(): Promise<void> {
+    for (const audit of this._audits.filter((item) => item.dashboard.isPinned)) {
+      if (this._view !== "home") return;
+      await this.#runFromHome(audit, true);
+    }
   }
 
   disconnectedCallback(): void {

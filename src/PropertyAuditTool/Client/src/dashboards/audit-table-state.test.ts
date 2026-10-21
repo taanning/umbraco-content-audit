@@ -123,7 +123,7 @@ describe('table-first state and inline panels', () => {
 
   it('renders filterable headers before the first run, including culture', async () => {
     const element = await fixture(html`<property-audit-results></property-audit-results>`);
-    expect(element.shadowRoot!.querySelectorAll('.filter')).to.have.length(5);
+    expect(element.shadowRoot!.querySelectorAll('.filter')).to.have.length(4);
     expect(element.shadowRoot!.textContent).to.include('propertyAudit_culture');
     expect(element.shadowRoot!.querySelectorAll('.sort.active')).to.have.length(1);
   });

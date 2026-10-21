@@ -65,7 +65,7 @@ export class AuditResultsElement extends UmbLitElement {
   #sortHeader(label: string, key: string) {
     return html`<div class="column-header">
       <span class="column-name">${label}</span>
-      <uui-button class="filter ${this.activeFilters.includes(key) ? "active" : ""}" compact
+      ${key === "kind" ? "" : html`<uui-button class="filter ${this.activeFilters.includes(key) ? "active" : ""}" compact
         look="default" label=${`${this.localize.term("propertyAudit_filterColumn")}: ${label}`}
         ?disabled=${this.loading || this.configurationOpen}
         @click=${() => this.dispatchEvent(new CustomEvent("results-filter", {
@@ -73,7 +73,7 @@ export class AuditResultsElement extends UmbLitElement {
         }))}
       ><svg class="filter-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path class="filter-fill" d="M10 20a1 1 0 0 0 .553.895l2 1A1 1 0 0 0 14 21v-7a2 2 0 0 1 .517-1.341L21.74 4.67A1 1 0 0 0 21 3H3a1 1 0 0 0-.742 1.67l7.225 7.989A2 2 0 0 1 10 14z" />
-      </svg></uui-button>
+      </svg></uui-button>`}
       <uui-button compact look="default" class="sort ${this.sortBy === key ? "active" : ""}"
         label=${`${this.localize.term("propertyAudit_sortAscending")}/${this.localize.term("propertyAudit_sortDescending")}: ${label}`}
         aria-pressed=${String(this.sortBy === key)} ?disabled=${this.loading}

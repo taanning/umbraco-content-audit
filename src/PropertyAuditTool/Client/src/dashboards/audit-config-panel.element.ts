@@ -1,5 +1,6 @@
 import { css, html, customElement, property, state } from "@umbraco-cms/backoffice/external/lit";
 import { UmbLitElement } from "@umbraco-cms/backoffice/lit-element";
+import { UMB_MODAL_MANAGER_CONTEXT, UMB_CONFIRM_MODAL } from "@umbraco-cms/backoffice/modal";
 import type { AuditCatalogResponse, AuditColumnDefinition, AuditDefinition } from "../api/index.js";
 import {
   availableColumns, BASE_COLUMNS, columnFilterValid, OPERATORS, REQUIRED_BASE_COLUMNS,
@@ -9,6 +10,15 @@ import {
 
 @customElement("property-audit-config-panel")
 export class AuditConfigPanelElement extends UmbLitElement {
+  #modalManager?: typeof UMB_MODAL_MANAGER_CONTEXT.TYPE;
+
+  constructor() {
+    super();
+    this.consumeContext(UMB_MODAL_MANAGER_CONTEXT, (context) => {
+      this.#modalManager = context;
+    });
+  }
+
   @property({ attribute: false }) request!: PanelRequest;
   @property({ attribute: false }) catalog!: AuditCatalogResponse;
   @property({ type: Boolean }) busy = false;
@@ -32,6 +42,9 @@ export class AuditConfigPanelElement extends UmbLitElement {
       this._colour = this.request.colour.replace(/^theme-/, "@");
       this._search = {};
       this._expressionMode = this.#filterColumn?.filter?.expression != null;
+      if (this.request.kind === "filter" && !this._expressionMode && !this.#filterColumn?.filter) {
+        this.#setFilter({ filter: { operator: "hasText", value: null, expression: null } });
+      }
     }
   }
 
@@ -164,15 +177,15 @@ export class AuditConfigPanelElement extends UmbLitElement {
     const column = this.#filterColumn ?? { alias: this.request.alias!, valueType: "text", filter: null };
     const filter = column.filter;
     return html`<div class="filter-fields">
-      <uui-select label=${this.#term("filterMode")} .value=${this._expressionMode ? "expression" : filter ? "simple" : "none"}
-        .options=${["none", "simple", "expression"].map((value) => ({
+      <uui-select label=${this.#term("filterMode")} .value=${this._expressionMode ? "expression" : "simple"}
+        .options=${["simple", "expression"].map((value) => ({
           name: this.#term(`filter_${value}`), value,
-          selected: value === (this._expressionMode ? "expression" : filter ? "simple" : "none"),
+          selected: value === (this._expressionMode ? "expression" : "simple"),
         }))}
         @change=${(event: Event) => {
           const mode = (event.target as HTMLSelectElement).value;
           this._expressionMode = mode === "expression";
-          this.#setFilter({ filter: mode === "none" ? null : {
+          this.#setFilter({ filter: {
             operator: "hasText", value: null, expression: mode === "expression" ? "" : null,
           } });
         }}></uui-select>
@@ -180,7 +193,15 @@ export class AuditConfigPanelElement extends UmbLitElement {
         ? html`<uui-input label=${this.#term("expression")} placeholder=${this.#term("expressionExamples")}
             .value=${filter?.expression ?? ""} @input=${(event: InputEvent) =>
               this.#setFilter({ filter: { operator: "equals", expression: (event.target as HTMLInputElement).value } })}
-          ></uui-input><small>${this.#term("expressionNote")}</small>`
+          ></uui-input><div class="expression-notes">
+          <small>${this.#term("expressionNote")}</small>
+          <small>${this.#term("expressionOps")}</small>
+          <ul>
+            <li><small>${this.#term("expressionHelpQuoted")} <code>= 'Kim'</code>, <code>&lt; '2025-06-01'</code></small></li>
+            <li><small>${this.#term("expressionHelpNumber")} <code>&gt;= 10</code>, <code>!= true</code></small></li>
+            <li><small>${this.#term("expressionHelpLike")} <code>LIKE 'coffee%'</code>, <code>LIKE '_en'</code></small></li>
+          </ul>
+        </div>`
         : filter ? html`<uui-select label=${this.#term("operator")} .value=${filter.operator}
             .options=${(OPERATORS[column.valueType] ?? OPERATORS.text).map((value) => ({
               name: this.#term(`op_${value}`), value, selected: value === filter.operator,
@@ -201,7 +222,7 @@ export class AuditConfigPanelElement extends UmbLitElement {
           @click=${() => this.dispatchEvent(new CustomEvent("panel-cancel", { bubbles: true, composed: true }))}
         >${this.#term("cancel")}</uui-button>
         <uui-button look="primary" color="danger" label=${this.#term("removeFilter")} ?disabled=${this.busy}
-          @click=${() => { this._expressionMode = false; this.#setFilter({ filter: null }); }}
+          @click=${this.#removeFilter}
         >${this.#term("removeFilter")}</uui-button>
       </div>
     </div>`;
@@ -263,6 +284,28 @@ export class AuditConfigPanelElement extends UmbLitElement {
     return this._draft.columns.length <= 512
       && (!this.#filterColumn || columnFilterValid(this.#filterColumn));
   }
+  /** Confirm, then clear the filter and apply in one step - no second Apply needed. */
+  async #removeFilter(): Promise<void> {
+    if (this.busy) return;
+    if (this.#modalManager) {
+      const modal = this.#modalManager.open(this, UMB_CONFIRM_MODAL, {
+        data: {
+          headline: this.#term("removeFilterTitle"),
+          content: this.#term("removeFilterConfirm", this.#requestName()),
+          color: "danger",
+          confirmLabel: this.#term("removeFilter"),
+        },
+      });
+      try {
+        await modal.onSubmit();
+      } catch {
+        return;
+      }
+    }
+    this._expressionMode = false;
+    this.#setFilter({ filter: null });
+    this.#apply();
+  }
   #apply(): void {
     if (!this.#valid || this.busy) return;
     const detail: PanelSubmit = {
@@ -314,6 +357,14 @@ export class AuditConfigPanelElement extends UmbLitElement {
     .actions > span { flex: 1; }
     .filter-fields { display: flex; align-items: center; flex-wrap: wrap; gap: var(--uui-size-space-4); }
     .filter-fields uui-input { flex: 1; min-width: min(100%, 18em); }
+    .expression-notes { display: flex; flex-direction: column; gap: var(--uui-size-space-1); flex-basis: 100%; }
+    .expression-notes ul { margin: 0; padding-left: var(--uui-size-space-5); }
+    .expression-notes code {
+      background: var(--uui-color-surface-alt);
+      padding: 0 var(--uui-size-space-1);
+      border-radius: var(--uui-border-radius);
+      font-size: inherit;
+    }
     .filter-actions { display: flex; align-items: center; gap: var(--uui-size-space-3); margin-left: auto; flex-wrap: wrap; }
     .metadata uui-input, .metadata uui-textarea { width: 100%; }
     .metadata umb-property-layout { padding-top: 0; }

@@ -287,12 +287,12 @@ describe('property-audit-dashboard', () => {
     expect(builder.audit.id).to.equal(saved.id);
   });
 
-  it('does not auto-run pinned audits on initial home load', async () => {
+  it('auto-runs pinned audits on initial home load', async () => {
     audits = [audit({ dashboard: { ...audit().dashboard, isPinned: true } })];
     const el = await createElement();
-    await new Promise(resolve => setTimeout(resolve, 0));
-    // Tiles show the persisted lastCount; runs stay user-triggered.
-    expect(runCalls).to.have.length(0);
+    for (let i = 0; i < 6; i++) await new Promise(resolve => setTimeout(resolve, 0));
+    // Tiles refresh their persisted counts by running pinned audits on load.
+    expect(runCalls).to.deep.equal([{ auditId: audits[0].id }]);
     const o = overview(el);
     expect(o.shadowRoot!.querySelectorAll('.tile').length).to.equal(1);
   });

@@ -216,11 +216,14 @@ describe('property-audit-builder', () => {
     }
   }
 
-  it('starts new audits with all types, cultures and available columns enabled', async () => {
+  it('starts new audits with all types, cultures and available columns enabled', async function () {
+    this.timeout(5000);
     const el = await createBuilder(null);
     const run = el.shadowRoot!.querySelector(
       '.run-audit',
     ) as HTMLButtonElement & { disabled: boolean };
+    // The initial auto-run ends with a short cooldown before the button re-enables.
+    await new Promise(resolve => setTimeout(resolve, 2200));
     expect(run.disabled).to.be.false;
     expect((el as any)._allDocumentTypes).to.be.true;
     expect((el as any)._allElementTypes).to.be.true;

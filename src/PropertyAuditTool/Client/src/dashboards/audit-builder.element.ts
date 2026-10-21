@@ -98,6 +98,7 @@ export class AuditBuilderElement extends UmbLitElement {
   @state() private _sortBy = "kind";
   @state() private _direction: "asc" | "desc" = "asc";
   @state() private _skip = 0;
+  @state() private _runCooldown = false;
   #runGeneration = 0;
   #abortController?: AbortController;
   #runId?: string;
@@ -122,6 +123,7 @@ export class AuditBuilderElement extends UmbLitElement {
     if (this.audit && this.#editVersion === null) {
       this.#applyAudit(this.audit);
     }
+    this.#freshnessTimer = window.setInterval(() => this.requestUpdate(), 30000);
   }
 
   willUpdate(): void {
@@ -145,10 +147,33 @@ export class AuditBuilderElement extends UmbLitElement {
 
   #autoRan = false;
 
+  /** CompletedUtc of this session's run, else the saved audit's last count run. */
+  get #lastRunUtc(): string | undefined {
+    return this._progress?.completedUtc ?? this.audit?.dashboard.lastCompletedUtc ?? undefined;
+  }
+
+  /** Relative age like "45s", "3m 12s", "1h 22m", "2d 4h". */
+  #formatAgo(iso: string): string {
+    let rest = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000));
+    const parts: string[] = [];
+    for (const [label, size] of [["d", 86400], ["h", 3600], ["m", 60], ["s", 1]] as const) {
+      const count = Math.floor(rest / size);
+      if (count > 0 || (parts.length === 0 && label === "s")) {
+        parts.push(`${count}${label}`);
+        rest -= count * size;
+      }
+      if (parts.length === 2) break;
+    }
+    return parts.join(" ");
+  }
+
   disconnectedCallback(): void {
+    window.clearInterval(this.#freshnessTimer);
     void this.#cancelRun();
     super.disconnectedCallback();
   }
+
+  #freshnessTimer?: number;
 
   #applyAudit(audit: AuditResponse): void {
     this.#editVersion = audit.version;
@@ -338,20 +363,50 @@ export class AuditBuilderElement extends UmbLitElement {
     return this.#availableColumns.find((column) => column.alias === alias)?.name ?? alias;
   }
 
-  /** Left-to-right sentence of the chain, e.g. "A · is empty or B · is empty and C · has text". */
-  #chainSentence(separator = "·"): string {
+  /** Left-to-right sentence of the chain, e.g. "Score Greater than "80" OR Title Is empty". */
+  #chainSentence(): string {
     const snapshot = this.#definitionSnapshot();
     const chain = this.#chain;
     return chain.map((link, index) => {
       const column = snapshot.columns.find((item) => item.alias === link.column);
       const name = this.#propertyName(link.column);
-      const detail = this.#linkDetail(column);
-      const describe = detail ? `${name} ${separator} ${detail}` : name;
+      const detail = column ? this.#linkDetail(column) : "";
+      const describe = detail ? `${name} ${detail}` : name;
       if (index === 0) return describe;
-      const joiner = this.localize.term(chain[index - 1].joiner === "or"
-        ? "propertyAudit_joinerOr" : "propertyAudit_joinerAnd");
-      return `${joiner} ${describe}`;
+      return `${this.#joinerTerm(chain, index)} ${describe}`;
     }).join(" ");
+  }
+
+  #joinerTerm(chain: AuditFilterLink[], index: number): string {
+    return this.localize.term(chain[index - 1].joiner === "or"
+      ? "propertyAudit_joinerOr" : "propertyAudit_joinerAnd");
+  }
+
+  /** Operator part of a link's filter, rendered green; value stays normal text. */
+  #linkDetailHtml(column: AuditColumnDefinition | undefined) {
+    const filter = column?.filter;
+    if (!filter) return "";
+    if (filter.expression != null) {
+      return html`<span class="chain-good">${filter.expression}</span>`;
+    }
+    const op = html`<span class="chain-good">${this.localize.term(`propertyAudit_op_${filter.operator}`)}</span>`;
+    return ["isEmpty", "hasText"].includes(filter.operator)
+      ? op
+      : html`${op} ${JSON.stringify(filter.value ?? "")}`;
+  }
+
+  /** Chain sentence as lit parts so the operator renders green. */
+  #chainSentenceHtml() {
+    const snapshot = this.#definitionSnapshot();
+    const chain = this.#chain;
+    return chain.map((link, index) => {
+      const column = snapshot.columns.find((item) => item.alias === link.column);
+      const name = this.#propertyName(link.column);
+      const detail = this.#linkDetailHtml(column);
+      const describe = detail === "" ? html`${name}` : html`${name} ${detail}`;
+      if (index === 0) return describe;
+      return html` ${this.#joinerTerm(chain, index)} ${describe}`;
+    });
   }
 
   #filterSummary(): string[] {
@@ -378,7 +433,7 @@ export class AuditBuilderElement extends UmbLitElement {
       return column ? this.localize.term(`propertyAudit_${column.label}`) : alias;
     };
 
-    const chainSentence = this.#chainSentence(":");
+    const chainSentence = this.#chainSentence();
     return [
       `${this.localize.term("propertyAudit_type")}: ${typeText}`,
       `${this.localize.term("propertyAudit_culture")}: ${cultureText}`,
@@ -611,8 +666,22 @@ export class AuditBuilderElement extends UmbLitElement {
     this.#applyChainEdit();
   }
 
-  #removeChainLink(alias: string): void {
-    if (this.#chainBusy) return;
+  async #removeChainLink(alias: string): Promise<void> {
+    if (this.#chainBusy || !this.#modalManager) return;
+    const modal = this.#modalManager.open(this, UMB_CONFIRM_MODAL, {
+      data: {
+        headline: this.localize.term("propertyAudit_removeFilterTitle"),
+        content: this.localize.term("propertyAudit_removeFilterConfirm",
+          this.#propertyName(alias)),
+        color: "danger",
+        confirmLabel: this.localize.term("propertyAudit_removeFilter"),
+      },
+    });
+    try {
+      await modal.onSubmit();
+    } catch {
+      return;
+    }
     this._filterChain = this.#chain.filter((link) => link.column !== alias);
     this._columns = this._columns.map((column) =>
       column.alias === alias ? { ...column, filterMode: "none" } : column);
@@ -818,6 +887,9 @@ export class AuditBuilderElement extends UmbLitElement {
     } finally {
       if (generation === this.#runGeneration) {
         this._running = false;
+        // Brief lockout so a fast repeat click cannot spam a new scan.
+        this._runCooldown = true;
+        window.setTimeout(() => { this._runCooldown = false; }, 2000);
       }
     }
   }
@@ -898,11 +970,11 @@ export class AuditBuilderElement extends UmbLitElement {
 
   // ---- rendering ---------------------------------------------------------------
 
-  #linkChip(alias: string): string {
+  #linkChip(alias: string) {
     const column = this.#definitionSnapshot().columns.find((item) => item.alias === alias);
     const name = this.#propertyName(alias);
-    const detail = this.#linkDetail(column);
-    return detail ? `${name} · ${detail}` : name;
+    const detail = this.#linkDetailHtml(column);
+    return detail === "" ? html`${name}` : html`${name} ${detail}`;
   }
 
   #renderFilterChain() {
@@ -910,17 +982,14 @@ export class AuditBuilderElement extends UmbLitElement {
     if (chain.length === 0) return "";
     const busy = this.#chainBusy;
     const expanded = this._chainExpanded;
-    return html`<section class="filter-chain">
-      <uui-button class="chain-toggle" look="default" compact
-        label=${this.localize.term("propertyAudit_activeFilters")}
-        aria-expanded=${expanded ? "true" : "false"}
+    return html`<section class="filter-chain" ?inert=${Boolean(this._panel)}>
+      <button type="button" class="chain-toggle" aria-expanded=${expanded ? "true" : "false"}
         ?disabled=${busy}
         @click=${() => { this._chainExpanded = !expanded; }}
       ><uui-icon name=${expanded ? "icon-navigation-down" : "icon-navigation-right"}></uui-icon>
-        ${this.localize.term("propertyAudit_activeFilters")} (${chain.length})</uui-button>
-      ${!expanded
-        ? html`<p class="chain-sentence">${this.#chainSentence()}</p>`
-        : html`<ol class="chain-rows">
+        <strong>${this.localize.term("propertyAudit_activeFilters")} (${chain.length}):</strong>
+        <span class="chain-sentence">${this.#chainSentenceHtml()}</span></button>
+      ${expanded ? html`<ol class="chain-rows">
             ${chain.map((link, index) => html`
               <li class="chain-row" draggable=${busy ? "false" : "true"}
                 @dragstart=${(event: DragEvent) => {
@@ -941,13 +1010,13 @@ export class AuditBuilderElement extends UmbLitElement {
               >
                 <uui-icon class="chain-grip" name="icon-navigation"
                   title=${this.localize.term("propertyAudit_reorderFilter")}></uui-icon>
-                <uui-tag class="chain-chip">${this.#linkChip(link.column)}</uui-tag>
-                <uui-button class="chain-remove" look="default" compact
-                  label=${this.localize.term("propertyAudit_removeFilter")}
-                  title=${this.localize.term("propertyAudit_removeFilter")}
+                <span class="chain-chip">${this.#linkChip(link.column)}</span>
+                <uui-button class="chain-edit" look="default" compact
+                  label=${this.localize.term("propertyAudit_edit")}
+                  title=${this.localize.term("propertyAudit_edit")}
                   ?disabled=${busy}
-                  @click=${() => this.#removeChainLink(link.column)}
-                ><uui-icon name="icon-wrong"></uui-icon></uui-button>
+                  @click=${() => this.#openPanel("filter", link.column)}
+                ><uui-icon name="icon-edit"></uui-icon></uui-button>
                 ${index < chain.length - 1
                   ? html`<uui-select class="chain-joiner"
                       label=${this.localize.term("propertyAudit_filterJoiner")}
@@ -963,9 +1032,15 @@ export class AuditBuilderElement extends UmbLitElement {
                         link.column, (event.target as HTMLSelectElement).value)}
                     ></uui-select>`
                   : ""}
+                <uui-button class="chain-remove" look="default" compact
+                  label=${this.localize.term("propertyAudit_removeFilter")}
+                  title=${this.localize.term("propertyAudit_removeFilter")}
+                  ?disabled=${busy}
+                  @click=${() => void this.#removeChainLink(link.column)}
+                ><uui-icon name="icon-wrong"></uui-icon></uui-button>
               </li>`)}
           </ol>
-          <p class="chain-hint">${this.localize.term("propertyAudit_chainOrderHint")}</p>`}
+          <p class="chain-hint">${this.localize.term("propertyAudit_chainOrderHint")}</p>` : ""}
     </section>`;
   }
 
@@ -988,7 +1063,7 @@ export class AuditBuilderElement extends UmbLitElement {
 
   render() {
     return html`
-      <div class="toolbar">
+      <div class="toolbar" ?inert=${Boolean(this._panel)}>
         <uui-button
           look="primary"
           label=${this.localize.term("propertyAudit_backToAudits")}
@@ -997,10 +1072,10 @@ export class AuditBuilderElement extends UmbLitElement {
           ><uui-icon name="icon-arrow-left"></uui-icon>${this.localize.term("propertyAudit_backToAudits")}</uui-button
         >
         <uui-button class="run-audit" look="primary" color="positive"
-          label=${this.localize.term("propertyAudit_runAudit")}
-          ?disabled=${this.#runDisabled || Boolean(this._panel)}
+          label=${this.localize.term(this._running ? "propertyAudit_running" : "propertyAudit_runAudit")}
+          ?disabled=${this.#runDisabled || Boolean(this._panel) || this._runCooldown}
           .state=${this._running ? "waiting" : undefined} @click=${() => void this.#onRun(true)}
-        ><uui-icon name="icon-play"></uui-icon>${this.localize.term("propertyAudit_runAudit")}</uui-button>
+        ><uui-icon name="icon-play"></uui-icon>${this.localize.term(this._running ? "propertyAudit_running" : "propertyAudit_runAudit")}</uui-button>
         <uui-button look="primary" color="positive" class="save-audit"
           label=${this.localize.term(this.audit && !this.audit.isOwner ? "propertyAudit_makeCopy" : "propertyAudit_save")}
           ?disabled=${this.#saveDisabled || Boolean(this._panel)}
@@ -1008,11 +1083,12 @@ export class AuditBuilderElement extends UmbLitElement {
         ><umb-icon name="icon-save"></umb-icon>
           ${this.localize.term(this.audit && !this.audit.isOwner ? "propertyAudit_makeCopy" : "propertyAudit_save")}
         </uui-button>
-        ${this.audit ? html`<uui-button look="secondary"
+        ${this.audit ? html`<uui-button look="outline"
           label=${this.localize.term("propertyAudit_cancel")}
           ?disabled=${!this._dirty || this._saving || this._running || Boolean(this._panel)}
           @click=${this.#cancelChanges}
-        ><uui-icon name="icon-undo"></uui-icon>${this.localize.term("propertyAudit_cancel")}</uui-button>` : ""}
+        ><uui-icon name="icon-undo"></uui-icon>${this.localize.term("propertyAudit_cancel")}</uui-button>
+        ${this._dirty ? html`<uui-tag look="secondary" class="dirty-tag">${this.localize.term("propertyAudit_unsavedChanges")}</uui-tag>` : ""}` : ""}
         <div class="toolbar-actions">
           <uui-checkbox label-position="left" label=${this.localize.term("propertyAudit_public")}
             ?checked=${this._isShared}
@@ -1033,7 +1109,7 @@ export class AuditBuilderElement extends UmbLitElement {
             ?disabled=${Boolean(this._panel) || this._saving || this._running}
             @click=${() => this.#openPanel("dashboard")}
           >${this.localize.term("propertyAudit_dashboardAppearance")}</uui-button>` : ""}
-                   ${this.audit?.isOwner
+          ${this.audit?.isOwner
             ? html`<uui-button
                 look="primary"
                 color="danger"
@@ -1051,36 +1127,41 @@ export class AuditBuilderElement extends UmbLitElement {
         ${this.localize.term("propertyAudit_columnLimit", MAX_COLUMNS)}</p>` : ""}
       ${this.#segmentUnsupported ? html`<p role="alert" class="warning">
         ${this.localize.term("propertyAudit_segmentUnsupported")}</p>` : ""}
-      ${this.audit || this._panel?.kind === "save" ? html`<uui-box class="audit-summary ${!this.audit ? "required" : ""}">
+      ${this.audit || this._panel?.kind === "save" ? html`<div class="audit-summary ${this._panel?.kind === "save" ? "editing" : ""} ${!this.audit ? "required" : ""}"
+        ?inert=${Boolean(this._panel && this._panel.kind !== "save")}>
         ${this._panel?.kind === "save" ? this.#renderConfigPanel(true)
           : html`<div class="summary-heading">
               <div class="summary-text">
                 <div class="title-row">
                   <h2 class="title">${this.audit ? this.audit.title : this.localize.term("propertyAudit_newAudit")}</h2>
-                  ${this._dirty ? html`<uui-tag look="secondary">${this.localize.term("propertyAudit_unsavedChanges")}</uui-tag>` : ""}
+                  ${!this.audit || this.audit.isOwner ? html`<uui-button
+                    class="edit-summary" look="default" compact
+                    label=${this.localize.term("propertyAudit_editMetadata")}
+                    title=${this.localize.term("propertyAudit_editMetadata")}
+                    ?disabled=${Boolean(this._panel) || this._saving || this._running || !this.catalog}
+                    @click=${() => this.#openPanel("save")}
+                  ><uui-icon name="icon-edit"></uui-icon></uui-button>` : ""}
+                  ${this._running
+                    ? html`<span class="last-run">${this.localize.term("propertyAudit_running")}</span>`
+                    : this.#lastRunUtc ? html`<span class="last-run">
+                        ${this.localize.term("propertyAudit_lastRunAgo", this.#formatAgo(this.#lastRunUtc))}
+                      </span>` : ""}
                 </div>
                 ${this.audit?.description ? html`<p>${this.audit.description}</p>` : ""}
               </div>
-              ${!this.audit || this.audit.isOwner ? html`<uui-button
-                class="edit-summary" look="default" compact
-                label=${this.localize.term("propertyAudit_editMetadata")}
-                title=${this.localize.term("propertyAudit_editMetadata")}
-                ?disabled=${Boolean(this._panel) || this._saving || this._running || !this.catalog}
-                @click=${() => this.#openPanel("save")}
-              ><uui-icon name="icon-edit"></uui-icon></uui-button>` : ""}
             </div>`}
         ${this.audit && this.#editVersion !== null && this.audit.version !== this.#editVersion
           ? html`<p class="warning" role="alert">
               ${this.localize.term("propertyAudit_savedStale")}
             </p>`
           : ""}
-      </uui-box>` : ""}
+      </div>` : ""}
 
       ${this.#renderFilterChain()}
 
       ${this._panel?.kind !== "save" ? this.#renderConfigPanel() : ""}
 
-      <uui-box class="results-box">
+      <uui-box class="results-box" ?inert=${Boolean(this._panel)}>
             <section>
               <div class="results-heading">
               <h3>
@@ -1141,7 +1222,7 @@ export class AuditBuilderElement extends UmbLitElement {
                 @results-page=${this.#onPage}
                 @results-filter=${(event: CustomEvent<{ key: string }>) => {
                   const key = event.detail.key;
-                  this.#openPanel(key === "kind" ? "types" : key === "culture" ? "cultures" : "filter",
+                  this.#openPanel(key === "culture" ? "cultures" : "filter",
                     key.startsWith("property:") ? key.slice(9) : key, !key.startsWith("property:"));
                 }}
                 @results-columns=${() => this.#openPanel("columns")}
@@ -1165,6 +1246,10 @@ export class AuditBuilderElement extends UmbLitElement {
       margin-bottom: var(--uui-size-space-5);
       flex-wrap: wrap;
     }
+    [inert] {
+      opacity: 0.45;
+      transition: opacity 0.15s ease-in-out;
+    }
     .toolbar-actions {
       margin-left: auto;
       display: flex;
@@ -1173,23 +1258,53 @@ export class AuditBuilderElement extends UmbLitElement {
       position: relative;
     }
     .toolbar uui-button :is(uui-icon, umb-icon) { margin-inline-end: var(--uui-size-space-2); }
+    .toolbar .dirty-tag {
+      align-self: stretch;
+      display: inline-flex;
+      align-items: center;
+      box-sizing: border-box;
+    }
     
     .results-box {
       margin-top: var(--uui-size-space-5);
     }
+
     .filter-chain {
       margin-top: var(--uui-size-space-5);
+      background: var(--uui-color-surface);
+      border: var(--uui-size-border-width, 1px) solid var(--uui-color-border);
+      border-radius: var(--uui-border-radius);
+    }
+    .chain-toggle {
+      display: flex;
+      align-items: baseline;
+      gap: var(--uui-size-space-3);
+      width: 100%;
+      padding: var(--uui-size-space-3) var(--uui-size-space-4);
+      border: none;
+      border-radius: var(--uui-border-radius);
+      background: transparent;
+      font: inherit;
+      color: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+    .chain-toggle:hover:not(:disabled) {
+      color: var(--uui-color-interactive);
+    }
+    .chain-toggle:disabled {
+      cursor: default;
     }
     .chain-toggle uui-icon {
-      margin-inline-end: var(--uui-size-space-2);
+      align-self: center;
     }
     .chain-sentence {
-      margin: var(--uui-size-space-2) 0 0 var(--uui-size-space-5);
+      font-weight: normal;
     }
     .chain-rows {
       list-style: none;
-      margin: var(--uui-size-space-3) 0 0;
-      padding: 0;
+      margin: 0;
+      padding: 0 var(--uui-size-space-4) var(--uui-size-space-3);
       display: flex;
       flex-direction: column;
       gap: var(--uui-size-space-2);
@@ -1200,29 +1315,40 @@ export class AuditBuilderElement extends UmbLitElement {
       align-items: center;
       gap: var(--uui-size-space-3);
       padding: var(--uui-size-space-2) var(--uui-size-space-3);
-      border: var(--uui-size-border-width, 1px) solid var(--uui-color-border);
-      border-radius: var(--uui-border-radius);
-      background: var(--uui-color-surface);
     }
     .chain-grip {
       cursor: grab;
       color: var(--uui-color-text-alt);
     }
     .chain-chip {
-      flex: 1;
-      --uui-tag-font-size: var(--uui-type-small-size);
+      min-width: 0;
     }
     .chain-joiner {
       width: 6em;
+      flex-shrink: 0;
+    }
+    .chain-good {
+      color: #0b8152;
     }
     .chain-hint {
-      margin: var(--uui-size-space-2) 0 0;
+      margin: 0;
+      padding: 0 var(--uui-size-space-4) var(--uui-size-space-3);
       font-size: var(--uui-type-small-size);
       color: var(--uui-color-text-alt);
+    }
+    .audit-summary {
+      margin-bottom: var(--uui-size-space-4);
+    }
+    .audit-summary.editing {
+      background: var(--uui-color-surface);
+      border: var(--uui-size-border-width, 1px) solid var(--uui-color-border);
+      border-radius: var(--uui-border-radius);
+      padding: var(--uui-size-space-4);
     }
     .audit-summary.required {
       border: var(--uui-size-border-width, 1px) solid var(--uui-color-danger);
       border-radius: var(--uui-border-radius);
+      padding: var(--uui-size-space-4);
     }
     .results-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--uui-size-space-4); flex-wrap: wrap; margin-bottom: var(--uui-size-space-4); }
     .results-heading h3 { margin: 0; }
@@ -1241,9 +1367,18 @@ export class AuditBuilderElement extends UmbLitElement {
     .title {
       margin: 0;
     }
-    .summary-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--uui-size-space-4); }
+    .summary-heading { display: flex; align-items: flex-start; gap: var(--uui-size-space-4); }
+    .edit-summary { opacity: 0.55; }
+    .edit-summary:hover:not([disabled]) { opacity: 1; }
     .summary-text { min-width: 0; }
     .title-row { display: flex; align-items: center; gap: var(--uui-size-space-3); flex-wrap: wrap; }
+    .last-run {
+      margin-left: auto;
+      font-size: var(--uui-type-small-size);
+      font-weight: normal;
+      color: var(--uui-color-text-alt);
+      white-space: nowrap;
+    }
     .summary-text p { margin: var(--uui-size-space-3) 0 0; }
     .warning {
       color: var(--uui-color-warning-alt);
