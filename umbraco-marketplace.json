@@ -21,6 +21,10 @@
       "Caption": "Filtered audit results across document and element types"
     },
     {
+      "ImageUrl": "https://raw.githubusercontent.com/taanning/umbraco-content-audit/main/docs/screenshots/filter-panel.png",
+      "Caption": "Per-column filters with simple operators or expressions"
+    },
+    {
       "ImageUrl": "https://raw.githubusercontent.com/taanning/umbraco-content-audit/main/docs/screenshots/type-panel.png",
       "Caption": "Document and element type selection"
     },
